@@ -1,3 +1,5 @@
+// Backend code
+
 import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
@@ -23,68 +25,50 @@ app.get("/", (req, res) => {
   res.json({ message: "Hello World." });
 });
 
-const roomToBroadcaster = new Map();
+const roomToUsers = new Map();
 
 io.on("connection", (socket) => {
-  socket.on("join-room", (data: { roomId: string }) => {
-    socket.join(data.roomId);
-
-    const isBroadcaster = roomToBroadcaster.get(data.roomId) === undefined;
-
-    if (isBroadcaster) {
-      roomToBroadcaster.set(data.roomId, socket.id);
+  socket.on("join-room", ({ roomId }) => {
+    if (!roomToUsers.has(roomId)) {
+      roomToUsers.set(roomId, new Set());
     }
+    roomToUsers.get(roomId).add(socket.id);
+    socket.join(roomId);
 
-    io.to(data.roomId).emit("user-joined", {
+    io.to(roomId).emit("user-joined", {
       userId: socket.id,
-      isBroadcaster,
-      broadcasterId: roomToBroadcaster.get(data.roomId),
+      users: Array.from(roomToUsers.get(roomId)),
     });
   });
 
-  socket.on(
-    "offer",
-    (data: { to: string; offer: RTCSessionDescriptionInit }) => {
-      io.to(data.to).emit("offer", { offer: data.offer, from: socket.id });
+  socket.on("leave-room", ({ roomId }) => {
+    if (roomToUsers.has(roomId)) {
+      roomToUsers.get(roomId).delete(socket.id);
+      io.to(roomId).emit("user-left", { userId: socket.id });
     }
-  );
+    socket.leave(roomId);
+  });
 
-  socket.on(
-    "answer",
-    (data: { to: string; answer: RTCSessionDescriptionInit }) => {
-      io.to(data.to).emit("answer", { answer: data.answer, from: socket.id });
-    }
-  );
+  socket.on("disconnect", () => {
+    roomToUsers.forEach((users, roomId) => {
+      if (users.has(socket.id)) {
+        users.delete(socket.id);
+        io.to(roomId).emit("user-left", { userId: socket.id });
+      }
+    });
+  });
 
-  socket.on(
-    "negotiation-needed",
-    (data: { to: string; offer: RTCSessionDescriptionInit }) => {
-      io.to(data.to).emit("negotiation-needed", {
-        offer: data.offer,
-        from: socket.id,
-      });
-    }
-  );
+  socket.on("offer", ({ to, offer }) => {
+    io.to(to).emit("offer", { from: socket.id, offer });
+  });
 
-  socket.on(
-    "negotiation-done",
-    (data: { to: string; answer: RTCSessionDescriptionInit }) => {
-      io.to(data.to).emit("negotiation-done", {
-        answer: data.answer,
-        from: socket.id,
-      });
-    }
-  );
+  socket.on("answer", ({ to, answer }) => {
+    io.to(to).emit("answer", { from: socket.id, answer });
+  });
 
-  socket.on(
-    "ice-candidate",
-    (data: { to: string; candidate: RTCIceCandidate }) => {
-      io.to(data.to).emit("ice-candidate", {
-        candidate: data.candidate,
-        from: socket.id,
-      });
-    }
-  );
+  socket.on("ice-candidate", ({ to, candidate }) => {
+    io.to(to).emit("ice-candidate", { from: socket.id, candidate });
+  });
 });
 
 const PORT = process.env.PORT || 5000;
